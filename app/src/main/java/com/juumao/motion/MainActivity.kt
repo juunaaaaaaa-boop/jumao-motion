@@ -1,38 +1,67 @@
+
 package com.juumao.motion
 
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Bundle
+import android.widget.ImageView
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private val Dark = Color(0xFF101114)
 private val Panel = Color(0xFF1B1D22)
 private val Accent = Color(0xFFB6FF4A)
 private val Muted = Color(0xFF858994)
+private val Card = Color(0xFF24262B)
+
+private data class ImportedMedia(
+    val uri: Uri,
+    val type: MediaType
+)
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.statusBarColor = android.graphics.Color.rgb(16, 17, 20)
-        window.navigationBarColor = android.graphics.Color.rgb(16, 17, 20)
+        window.statusBarColor =
+            android.graphics.Color.rgb(16, 17, 20)
+
+        window.navigationBarColor =
+            android.graphics.Color.rgb(16, 17, 20)
 
         setContent {
             MaterialTheme(
@@ -40,9 +69,10 @@ class MainActivity : ComponentActivity() {
                     background = Dark,
                     surface = Panel,
                     primary = Accent,
-                    onPrimary = Color.Black
-                    MediaEditor
-                    }
+                    secondary = Color(0xFF8BC34A),
+                    onPrimary = Color.Black,
+                    onBackground = Color.White,
+                    onSurface = Color.White
                 )
             ) {
                 JuumaoEditor()
@@ -53,15 +83,34 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun JuumaoEditor() {
+
+    val context = LocalContext.current
+
     val project = remember {
         MotionProject().apply {
             addTextLayer()
         }
     }
 
-    var revision by remember { mutableIntStateOf(0) }
-    var currentTime by remember { mutableLongStateOf(0L) }
-    var playing by remember { mutableStateOf(false) }
+    var revision by remember {
+        mutableIntStateOf(0)
+    }
+
+    var currentTime by remember {
+        mutableLongStateOf(0L)
+    }
+
+    var playing by remember {
+        mutableStateOf(false)
+    }
+
+    var mediaMap by remember {
+        mutableStateOf<Map<String, ImportedMedia>>(emptyMap())
+    }
+
+    var pendingMediaType by remember {
+        mutableStateOf(MediaType.IMAGE)
+    }
 
     val layers = remember(revision) {
         project.getLayers()
@@ -71,9 +120,80 @@ fun JuumaoEditor() {
         project.getSelectedLayer()
     }
 
+    val selectedMedia = selectedLayer?.let {
+        mediaMap[it.id]
+    }
+
+    // MEDIA PICKER
+
+    val mediaPicker =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+
+            if (uri != null) {
+
+                try {
+                    context.contentResolver
+                        .takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                } catch (_: Exception) {
+                    // Some providers do not support
+                    // persistable URI permission.
+                }
+
+                when (pendingMediaType) {
+
+                    MediaType.IMAGE -> {
+                        project.addImageLayer()
+                    }
+
+                    MediaType.VIDEO -> {
+                        project.addVideoLayer()
+                    }
+
+                    MediaType.AUDIO -> {
+                        project.addAudioLayer()
+                    }
+                }
+
+                val newLayer =
+                    project.getSelectedLayer()
+
+                if (newLayer != null) {
+                    mediaMap = mediaMap +
+                        (newLayer.id to ImportedMedia(
+                            uri = uri,
+                            type = pendingMediaType
+                        ))
+                }
+
+                revision++
+            }
+        }
+
+    fun importMedia(type: MediaType) {
+        pendingMediaType = type
+
+        val mimeTypes = when (type) {
+            MediaType.IMAGE -> arrayOf("image/*")
+            MediaType.VIDEO -> arrayOf("video/*")
+            MediaType.AUDIO -> arrayOf("audio/*")
+        }
+
+        mediaPicker.launch(mimeTypes)
+    }
+
+    // PLAYBACK ENGINE
+
     LaunchedEffect(playing) {
+
         while (playing) {
+
             delay(16)
+
             currentTime += 16
 
             if (currentTime >= project.duration) {
@@ -83,6 +203,8 @@ fun JuumaoEditor() {
         }
     }
 
+    // MAIN EDITOR
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -90,14 +212,19 @@ fun JuumaoEditor() {
     ) {
 
         // TOP BAR
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(58.dp)
                 .padding(horizontal = 16.dp),
+
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+
+            horizontalArrangement =
+                Arrangement.SpaceBetween
         ) {
+
             Text(
                 "JUUMAO",
                 color = Accent,
@@ -112,13 +239,14 @@ fun JuumaoEditor() {
             )
 
             Text(
-                "1.0",
+                "2.0",
                 color = Muted,
                 fontSize = 12.sp
             )
         }
 
-        // PREVIEW
+        // PREVIEW CANVAS
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -131,21 +259,25 @@ fun JuumaoEditor() {
                     Color(0xFF292C32),
                     RoundedCornerShape(14.dp)
                 ),
+
             contentAlignment = Alignment.Center
         ) {
 
             layers.reversed().forEach { layer ->
 
-                val transform = layer.getTransform(currentTime)
+                val transform =
+                    layer.getTransform(currentTime)
 
                 when (layer.type) {
 
                     LayerType.TEXT -> {
+
                         Text(
                             text = layer.name,
                             color = Color.White,
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
+
                             modifier = Modifier
                                 .offset(
                                     x = transform.x.dp,
@@ -161,6 +293,7 @@ fun JuumaoEditor() {
                     }
 
                     LayerType.SHAPE -> {
+
                         Box(
                             modifier = Modifier
                                 .size(75.dp)
@@ -184,11 +317,24 @@ fun JuumaoEditor() {
                     LayerType.IMAGE,
                     LayerType.VIDEO,
                     LayerType.AUDIO -> {
-                        Text(
-                            text = layer.name,
-                            color = Muted,
-                            fontSize = 13.sp
-                        )
+
+                        val media = mediaMap[layer.id]
+
+                        if (
+                            media != null &&
+                            layer.id == project.selectedLayerId
+                        ) {
+                            MediaPreview(
+                                media = media
+                            )
+                        } else if (media == null) {
+
+                            Text(
+                                layer.name,
+                                color = Muted,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
@@ -197,6 +343,7 @@ fun JuumaoEditor() {
                 "PREVIEW",
                 color = Color.White.copy(alpha = 0.12f),
                 fontSize = 10.sp,
+
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(10.dp)
@@ -205,62 +352,101 @@ fun JuumaoEditor() {
 
         Spacer(Modifier.height(12.dp))
 
-        // PLAYBACK
+        // PLAYBACK CONTROL
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
+
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+
+            horizontalArrangement =
+                Arrangement.SpaceBetween
         ) {
 
             Text(
-                "${currentTime / 1000f}s",
+                String.format(
+                    "%.2fs",
+                    currentTime / 1000f
+                ),
                 color = Color.White,
                 fontSize = 12.sp
             )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
 
                 TextButton(
-                    onClick = { currentTime = 0L }
+                    onClick = {
+                        currentTime = 0L
+                    }
                 ) {
-                    Text("RESET", color = Muted)
+                    Text(
+                        "RESET",
+                        color = Muted
+                    )
                 }
 
                 Button(
-                    onClick = { playing = !playing },
+                    onClick = {
+                        if (
+                            currentTime >= project.duration
+                        ) {
+                            currentTime = 0L
+                        }
+
+                        playing = !playing
+                    },
+
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Accent,
                         contentColor = Color.Black
                     )
                 ) {
-                    Text(if (playing) "PAUSE" else "PLAY")
+
+                    Text(
+                        if (playing) "PAUSE" else "PLAY"
+                    )
                 }
             }
 
             Text(
-                "${project.duration / 1000f}s",
+                String.format(
+                    "%.2fs",
+                    project.duration / 1000f
+                ),
                 color = Muted,
                 fontSize = 12.sp
             )
         }
 
+        // TIME SCRUBBER
+
         Slider(
             value = currentTime.toFloat(),
+
             onValueChange = {
                 currentTime = it.toLong()
             },
-            valueRange = 0f..project.duration.toFloat(),
+
+            valueRange =
+                0f..project.duration.toFloat(),
+
             colors = SliderDefaults.colors(
                 thumbColor = Accent,
                 activeTrackColor = Accent,
                 inactiveTrackColor = Panel
             ),
-            modifier = Modifier.padding(horizontal = 12.dp)
+
+            modifier = Modifier.padding(
+                horizontal = 12.dp
+            )
         )
 
         // LAYER MANAGER
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -271,9 +457,13 @@ fun JuumaoEditor() {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+
+                horizontalArrangement =
+                    Arrangement.SpaceBetween,
+
                 verticalAlignment = Alignment.CenterVertically
             ) {
+
                 Text(
                     "LAYERS (${layers.size})",
                     color = Color.White,
@@ -289,12 +479,19 @@ fun JuumaoEditor() {
 
             Spacer(Modifier.height(8.dp))
 
+            // ADD LAYER BUTTONS
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    .horizontalScroll(
+                        rememberScrollState()
+                    ),
+
+                horizontalArrangement =
+                    Arrangement.spacedBy(6.dp)
             ) {
+
                 AddLayerButton("TEXT") {
                     project.addTextLayer()
                     revision++
@@ -306,28 +503,30 @@ fun JuumaoEditor() {
                 }
 
                 AddLayerButton("IMAGE") {
-                    project.addImageLayer()
-                    revision++
+                    importMedia(MediaType.IMAGE)
                 }
 
                 AddLayerButton("VIDEO") {
-                    project.addVideoLayer()
-                    revision++
+                    importMedia(MediaType.VIDEO)
                 }
 
                 AddLayerButton("AUDIO") {
-                    project.addAudioLayer()
-                    revision++
+                    importMedia(MediaType.AUDIO)
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
+            // LAYER LIST
+
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(
+                        rememberScrollState()
+                    )
             ) {
+
                 layers.forEach { layer ->
 
                     val selected =
@@ -337,26 +536,42 @@ fun JuumaoEditor() {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 3.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(
+                                RoundedCornerShape(8.dp)
+                            )
                             .background(
-                                if (selected)
+                                if (selected) {
                                     Color(0xFF303A25)
-                                else
-                                    Color(0xFF24262B)
+                                } else {
+                                    Card
+                                }
                             )
                             .clickable {
+
                                 project.selectLayer(layer.id)
+
                                 revision++
                             }
                             .padding(11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+
+                        verticalAlignment =
+                            Alignment.CenterVertically,
+
+                        horizontalArrangement =
+                            Arrangement.SpaceBetween
                     ) {
 
                         Column {
+
                             Text(
                                 layer.name,
-                                color = if (selected) Accent else Color.White,
+
+                                color = if (selected) {
+                                    Accent
+                                } else {
+                                    Color.White
+                                },
+
                                 fontSize = 13.sp
                             )
 
@@ -368,6 +583,7 @@ fun JuumaoEditor() {
                         }
 
                         if (selected) {
+
                             Text(
                                 "SELECTED",
                                 color = Accent,
@@ -380,20 +596,27 @@ fun JuumaoEditor() {
         }
 
         // PROPERTY PANEL
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(245.dp)
                 .background(Dark)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(
+                    rememberScrollState()
+                )
                 .padding(16.dp)
         ) {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+
+                horizontalArrangement =
+                    Arrangement.SpaceBetween,
+
                 verticalAlignment = Alignment.CenterVertically
             ) {
+
                 Text(
                     "TRANSFORM",
                     color = Color.White,
@@ -402,37 +625,60 @@ fun JuumaoEditor() {
 
                 TextButton(
                     onClick = {
+
                         selectedLayer?.let {
+
                             it.positionX.addKeyframe(
                                 currentTime,
-                                it.positionX.getValueAt(currentTime)
+                                it.positionX.getValueAt(
+                                    currentTime
+                                )
                             )
+
                             it.positionY.addKeyframe(
                                 currentTime,
-                                it.positionY.getValueAt(currentTime)
+                                it.positionY.getValueAt(
+                                    currentTime
+                                )
                             )
+
                             it.scaleX.addKeyframe(
                                 currentTime,
-                                it.scaleX.getValueAt(currentTime)
+                                it.scaleX.getValueAt(
+                                    currentTime
+                                )
                             )
+
                             it.scaleY.addKeyframe(
                                 currentTime,
-                                it.scaleY.getValueAt(currentTime)
+                                it.scaleY.getValueAt(
+                                    currentTime
+                                )
                             )
+
                             it.rotation.addKeyframe(
                                 currentTime,
-                                it.rotation.getValueAt(currentTime)
+                                it.rotation.getValueAt(
+                                    currentTime
+                                )
                             )
+
                             it.opacity.addKeyframe(
                                 currentTime,
-                                it.opacity.getValueAt(currentTime)
+                                it.opacity.getValueAt(
+                                    currentTime
+                                )
                             )
                         }
 
                         revision++
                     }
                 ) {
-                    Text("＋ KEYFRAME", color = Accent)
+
+                    Text(
+                        "＋ KEYFRAME",
+                        color = Accent
+                    )
                 }
             }
 
@@ -440,136 +686,26 @@ fun JuumaoEditor() {
 
                 PropertySlider(
                     "POSITION X",
-                    selectedLayer.positionX.getValueAt(currentTime),
+                    selectedLayer.positionX.getValueAt(
+                        currentTime
+                    ),
                     -300f,
                     300f
                 ) {
-                    selectedLayer.positionX.addKeyframe(currentTime, it)
+
+                    selectedLayer.positionX.addKeyframe(
+                        currentTime,
+                        it
+                    )
+
                     revision++
                 }
 
                 PropertySlider(
                     "POSITION Y",
-                    selectedLayer.positionY.getValueAt(currentTime),
+                    selectedLayer.positionY.getValueAt(
+                        currentTime
+                    ),
                     -300f,
                     300f
-                ) {
-                    selectedLayer.positionY.addKeyframe(currentTime, it)
-                    revision++
-                }
-
-                PropertySlider(
-                    "SCALE",
-                    selectedLayer.scaleX.getValueAt(currentTime),
-                    0.1f,
-                    3f
-                ) {
-                    selectedLayer.scaleX.addKeyframe(currentTime, it)
-                    selectedLayer.scaleY.addKeyframe(currentTime, it)
-                    revision++
-                }
-
-                PropertySlider(
-                    "ROTATION",
-                    selectedLayer.rotation.getValueAt(currentTime),
-                    -360f,
-                    360f
-                ) {
-                    selectedLayer.rotation.addKeyframe(currentTime, it)
-                    revision++
-                }
-
-                PropertySlider(
-                    "OPACITY",
-                    selectedLayer.opacity.getValueAt(currentTime),
-                    0f,
-                    1f
-                ) {
-                    selectedLayer.opacity.addKeyframe(currentTime, it)
-                    revision++
-                }
-
-                Button(
-                    onClick = {
-                        project.removeLayer(selectedLayer.id)
-                        revision++
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF402326),
-                        contentColor = Color(0xFFFF7777)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("DELETE SELECTED LAYER")
-                }
-
-            } else {
-                Text(
-                    "Pilih layer untuk mengatur transform.",
-                    color = Muted
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun AddLayerButton(
-    title: String,
-    onClick: () -> Unit
-) {
-    OutlinedButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(
-            horizontal = 12.dp,
-            vertical = 4.dp
-        )
-    ) {
-        Text(
-            title,
-            fontSize = 10.sp,
-            color = Accent
-        )
-    }
-}
-
-@Composable
-fun PropertySlider(
-    title: String,
-    value: Float,
-    min: Float,
-    max: Float,
-    onChange: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(vertical = 5.dp)
-    ) {
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                title,
-                color = Color.White,
-                fontSize = 10.sp
-            )
-
-            Text(
-                String.format("%.2f", value),
-                color = Accent,
-                fontSize = 10.sp
-            )
-        }
-
-        Slider(
-            value = value.coerceIn(min, max),
-            onValueChange = onChange,
-            valueRange = min..max,
-            colors = SliderDefaults.colors(
-                thumbColor = Accent,
-                activeTrackColor = Accent
-            )
-        )
-    }
-}
+              
