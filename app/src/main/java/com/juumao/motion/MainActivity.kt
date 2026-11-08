@@ -41,6 +41,8 @@ class MainActivity : ComponentActivity() {
                     surface = Panel,
                     primary = Accent,
                     onPrimary = Color.Black
+                    MediaEditor
+                    }
                 )
             ) {
                 JuumaoEditor()
